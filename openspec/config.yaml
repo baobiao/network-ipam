@@ -1,0 +1,270 @@
+schema: spec-driven
+
+# =============================================================================
+# IP ADDRESS MANAGEMENT (IPAM) — PROJECT CONSTITUTION
+# The entire constitution is encoded in this file (context + rules) so it is
+# always loaded as context when AI creates or reviews OpenSpec artifacts.
+# Amending it requires an explicit OpenSpec change proposal (see Article 12).
+# =============================================================================
+
+context: |
+  ==========================================================================
+  IP ADDRESS MANAGEMENT (IPAM) — PROJECT CONSTITUTION
+  Version: 1.0.0   |   Ratified: 2026-07-21
+  ==========================================================================
+
+  This constitution defines the non-negotiable principles, constraints, and
+  standards that EVERY OpenSpec change (proposal -> design -> spec -> tasks ->
+  implementation) MUST comply with. Requirement keywords (MUST, MUST NOT,
+  SHOULD, MAY) follow RFC 2119. Where a change conflicts with this document,
+  the constitution wins; the only way to override it is to amend it via the
+  process in Article 12.
+
+  --------------------------------------------------------------------------
+  ARTICLE 1 — PURPOSE & SYSTEM DEFINITION
+  --------------------------------------------------------------------------
+  1.1 The system is an IP Address Management (IPAM) application: the
+      authoritative record of the organisation's subnets and IP address
+      assignments.
+  1.2 It comprises a single-page React frontend, a Java backend, and a
+      relational database, delivered as containers.
+  1.3 Correctness of the address data is the system's paramount quality:
+      the data is a source of truth that humans and automation rely on.
+
+  --------------------------------------------------------------------------
+  ARTICLE 2 — SCOPE & NON-GOALS
+  --------------------------------------------------------------------------
+  2.1 IN SCOPE (v1): management of Sections, Subnets (hierarchical/nested),
+      and IP addresses, plus the associations in Article 3, RBAC, a full
+      audit trail, REST API, and the SPA UI.
+  2.2 NON-GOALS — the following MUST NOT be implemented in v1:
+      (a) Active DNS/DHCP integration. Nameserver sets are metadata only;
+          no live DNS record push and no DHCP lease management.
+      (b) IPv6 support. Only IPv4 is implemented (see 5.x). The data model
+          MUST nonetheless remain IP-version-agnostic so IPv6 can be added
+          later without redesign.
+      (c) VRFs and user-defined custom fields (see Article 3 / Article 4).
+  2.3 PERMANENT NON-GOAL — Network discovery / scanning (ping sweeps, SNMP
+      auto-discovery, live-host reconciliation) is out of scope now AND for
+      the foreseeable future. Address data is entered or imported, never
+      auto-discovered.
+  2.4 DEFERRED ROADMAP (not in v1, but the architecture MUST NOT preclude
+      them):
+      (a) A network route-table data model.
+      (b) Agentic network debugging that reasons over route-table data and
+          IPAM data together.
+      To keep these feasible, all IPAM data MUST remain reachable through a
+      clean, documented, versioned API (Article 8). New features MUST NOT
+      trap data behind UI-only or undocumented paths.
+
+  --------------------------------------------------------------------------
+  ARTICLE 3 — DOMAIN MODEL
+  --------------------------------------------------------------------------
+  3.1 Organisational spine (modelled after phpIPAM, simplified):
+        Section  ->  Subnet (nested tree)  ->  IP address
+      There is NO "Folder" level. A Section is a top-level, nestable
+      container that owns a tree of subnets. Subnets form a hierarchy via a
+      parent/master pointer (supernet -> child subnets -> host subnet). IP
+      addresses belong to a subnet.
+  3.2 Cross-cutting associations a subnet and/or IP MAY link to:
+      (a) VLANs, grouped under L2 domains.
+      (b) Locations / Sites (physical).
+      (c) Devices and device types.
+      (d) Nameserver (DNS) sets — metadata only (see 2.2a).
+  3.3 IP address lifecycle — every IP has exactly one of these states with
+      controlled transitions: Available, Reserved, Allocated, Deprecated.
+  3.4 The schema is FIXED. There are no user-defined custom fields. New
+      metadata requires a schema change plus a migration (Article 9), not a
+      generic custom-field mechanism.
+
+  --------------------------------------------------------------------------
+  ARTICLE 4 — DOMAIN INVARIANTS (MUST NEVER BE VIOLATED)
+  --------------------------------------------------------------------------
+  4.1 Single global address space. There is exactly one address space; VRFs
+      do not exist in v1.
+  4.2 No overlaps. Overlapping subnets MUST be rejected at the service and
+      database layers. This is a hard block, not a warning.
+  4.3 No duplicate assignments. An IP address MUST NOT be assigned twice.
+      Duplicate assignment MUST be rejected at the service and database
+      layers.
+  4.4 Valid addressing. CIDR/subnet math MUST be validated; an IP MUST fall
+      within the bounds of its parent subnet; masks and boundaries MUST be
+      well-formed.
+  4.5 Full immutable audit log. Every create, update, and delete of a
+      Section, Subnet, or IP assignment MUST produce an append-only audit
+      record capturing actor, action, timestamp, and before/after values.
+      Audit records MUST NOT be editable or deletable through the
+      application.
+  4.6 These invariants are enforced server-side. Client-side checks are a
+      convenience only and never the source of truth.
+
+  --------------------------------------------------------------------------
+  ARTICLE 5 — TECHNOLOGY STACK
+  --------------------------------------------------------------------------
+  Versioning policy: pin to MAJOR versions. Minor/patch upgrades within a
+  pinned major are allowed WITHOUT amending this constitution; changing a
+  major version REQUIRES an amendment. Floating tags such as ":latest" MUST
+  NOT be used in builds, Dockerfiles, or compose files.
+
+  5.1 Backend: Java 25 (LTS) with Spring Boot 3.x. Build tool: Maven.
+  5.2 Frontend: React 19.x written in TypeScript (5.x), built with Vite.
+      It is a single-page application; the built static bundle is served by
+      the backend (see Article 6).
+  5.3 Database: PostgreSQL 18. PostgreSQL is the ONLY supported database;
+      no embedded/alternate database engines.
+  5.4 Schema migrations: Flyway (SQL-first, forward-only versioned
+      migrations).
+  5.5 Container base images MUST be pinned to a supported major tag (e.g. a
+      Java 25 JRE base such as Eclipse Temurin 25, and postgres:18), never
+      ":latest".
+
+  --------------------------------------------------------------------------
+  ARTICLE 6 — ARCHITECTURE & PACKAGING
+  --------------------------------------------------------------------------
+  6.1 Single application image. The React SPA and the Spring Boot backend
+      MUST ship in ONE container image. The SPA is compiled to static assets
+      (multi-stage build: Node build stage -> assets copied into the Java
+      image) and served by the backend, with client-side routes falling back
+      to index.html.
+  6.2 The database runs as a SEPARATE container (PostgreSQL, Article 5.3).
+  6.3 Default deployment is a self-contained docker-compose stack (app image
+      + PostgreSQL). The application MUST be stateless (all persistent state
+      lives in PostgreSQL) so it can later scale or move to an orchestrator
+      without redesign. Adding a new runtime datastore REQUIRES an amendment.
+  6.4 Containers MUST run as a non-root user.
+
+  --------------------------------------------------------------------------
+  ARTICLE 7 — SECURITY & ACCESS CONTROL
+  --------------------------------------------------------------------------
+  7.1 Access control is Role-Based (RBAC) with local accounts stored in the
+      application database (e.g. Admin / Operator / Viewer). Every mutating
+      operation MUST be authorised against the caller's role.
+  7.2 Authentication is required for all non-public endpoints; there is no
+      anonymous write access.
+  7.3 Configuration follows 12-factor principles: all configuration is
+      supplied via environment variables, with separate dev/prod profiles.
+  7.4 Secrets (DB credentials, signing keys, etc.) MUST NOT be committed to
+      the repository or baked into images; they are injected at runtime.
+  7.5 Passwords MUST be stored using a strong adaptive hash; sensitive data
+      MUST NOT be logged.
+
+  --------------------------------------------------------------------------
+  ARTICLE 8 — API DESIGN
+  --------------------------------------------------------------------------
+  8.1 The backend exposes a resource-oriented REST API.
+  8.2 The API is contract-first: an OpenAPI specification is authored/owned
+      as the contract and kept in sync with the implementation. Every API
+      change updates the OpenAPI document in the same change.
+  8.3 The API is URL-versioned (e.g. /api/v1). Breaking changes require a
+      new version.
+  8.4 Errors use a single consistent, documented error format.
+  8.5 All IPAM data MUST be accessible through this API (supports the SPA,
+      external automation, and the deferred roadmap in 2.4).
+
+  --------------------------------------------------------------------------
+  ARTICLE 9 — DATA INTEGRITY, MIGRATIONS & PROTECTION
+  --------------------------------------------------------------------------
+  9.1 All schema changes are delivered as forward-only Flyway migrations,
+      versioned and reviewed. No manual/ad-hoc schema edits; no Hibernate
+      auto-DDL in any environment.
+  9.2 Referential integrity and the invariants of Article 4 are enforced by
+      database constraints wherever feasible, in addition to service-layer
+      checks.
+  9.3 Data protection: scheduled PostgreSQL backups MUST be provided, with a
+      documented restore procedure and a defined retention policy. The
+      immutable audit log (4.5) complements, but does not replace, backups.
+
+  --------------------------------------------------------------------------
+  ARTICLE 10 — QUALITY & TESTING
+  --------------------------------------------------------------------------
+  10.1 Unit and integration tests are REQUIRED. CI MUST be green (all tests
+       passing) before any change is merged.
+  10.2 The domain invariants (Article 4 — overlap rejection, duplicate
+       rejection, CIDR/boundary validation) MUST have dedicated tests. A
+       change that touches allocation or subnet logic without such tests is
+       non-compliant.
+  10.3 A code-coverage floor is enforced in CI (target ~80%); merges that
+       drop coverage below the floor are rejected.
+  10.4 Tests need not be strictly test-first, but they are not optional.
+
+  --------------------------------------------------------------------------
+  ARTICLE 11 — OBSERVABILITY & OPERATIONS
+  --------------------------------------------------------------------------
+  11.1 Structured (JSON) logging with correlation IDs across requests.
+  11.2 Health and readiness endpoints (Spring Boot Actuator).
+  11.3 Prometheus-format metrics exposed.
+  11.4 Distributed tracing via OpenTelemetry.
+  11.5 New endpoints and workflows MUST emit appropriate logs, metrics, and
+       trace spans.
+
+  --------------------------------------------------------------------------
+  ARTICLE 12 — GOVERNANCE, VERSIONING & AMENDMENT
+  --------------------------------------------------------------------------
+  12.1 The application uses Semantic Versioning (MAJOR.MINOR.PATCH).
+  12.2 This constitution is itself versioned (see header) and maintains the
+       amendment log below.
+  12.3 All work flows through OpenSpec: proposals are reviewed for
+       compliance with this constitution before implementation.
+  12.4 Amending this constitution REQUIRES an explicit OpenSpec change
+       proposal that states the article(s) affected and the rationale, and
+       that bumps the constitution version and appends to the amendment log.
+
+  --------------------------------------------------------------------------
+  ARTICLE 13 — AI-AUGMENTED DEVELOPMENT WORKFLOW (AGENT-FIRST)
+  --------------------------------------------------------------------------
+  13.1 Development MUST maximize the use of AI agents across the full
+       lifecycle — discovery, feature planning, specification updates,
+       implementation, and testing. Working manually is a deliberate
+       exception (chosen when agents are genuinely unsuitable), never the
+       default.
+  13.2 Per-phase agent usage:
+       (a) Discovery — use exploration/research agents to investigate the
+           codebase, prior art, and requirements before proposing changes.
+       (b) Feature planning — use planning agents to produce implementation
+           strategies, identify critical files, and surface trade-offs.
+       (c) Specification updates — use agents to draft and revise OpenSpec
+           proposals, specs, and tasks.
+       (d) Implementation — use coding agents to implement tasks.
+       (e) Testing — use agents to author and run tests.
+  13.3 Prefer running independent agents IN PARALLEL to shorten cycle time,
+       and use specialized agents for their purpose where available (e.g. an
+       exploration agent for discovery, a planning agent for planning).
+  13.4 Guardrails — agents operate WITHIN governance, never around it:
+       (a) A human MUST review and approve agent output before it is merged
+           and before any hard-to-reverse or outward-facing action (commit,
+           push, pull request, deploy).
+       (b) All agent-produced work MUST comply with this constitution and
+           pass CI (tests, coverage floor, and the Article 4 invariants).
+       (c) Agents MUST follow the OpenSpec change process (Article 12) and
+           MUST NOT bypass the domain invariants (Article 4) or the security
+           controls (Article 7).
+
+  --------------------------------------------------------------------------
+  AMENDMENT LOG
+  --------------------------------------------------------------------------
+  1.0.0 (2026-07-21) — Initial ratification.
+
+# =============================================================================
+# PER-ARTIFACT RULES — enforced when generating/reviewing each OpenSpec artifact
+# =============================================================================
+rules:
+  proposal:
+    - "State how the change complies with the domain invariants (Article 4). If it touches subnet or IP-assignment logic, explicitly describe overlap and duplicate handling."
+    - "A proposal MUST NOT introduce a v1 non-goal (Article 2) unless the proposal IS a constitution amendment (Article 12.4)."
+    - "Keep the persistent data model IP-version-agnostic even though only IPv4 is implemented; do not bake IPv4-only assumptions into schema or domain types."
+    - "Per Article 13 (agent-first), use exploration/research agents to investigate the codebase, prior art, and requirements before drafting, running independent investigations in parallel where possible."
+  design:
+    - "Confirm the change fits the Section -> Subnet (nested) -> IP model with a FIXED schema. New user-facing metadata means a schema change plus a Flyway migration, never a custom-field mechanism."
+    - "Preserve the single-image packaging (React SPA served by Spring Boot) and the PostgreSQL-only constraint. Do not add a new runtime datastore without a constitution amendment."
+    - "Expose new capability through the versioned REST/OpenAPI contract and keep all IPAM data reachable via that API (supports the deferred route-table/agentic roadmap in Article 2.4)."
+    - "Enforce Article 4 invariants server-side (service + DB constraints); client-side checks are convenience only."
+    - "Per Article 13 (agent-first), use planning agents to develop the implementation strategy, identify critical files, and surface trade-offs before finalising the design."
+  spec:
+    - "Use RFC 2119 keywords. Tie each requirement to the RBAC role(s) permitted to perform it (Article 7)."
+    - "Any requirement affecting subnets or IP assignments MUST include scenarios for overlap rejection, duplicate rejection, and CIDR/boundary validation."
+    - "Any requirement that mutates data MUST specify the immutable audit-log entry produced (actor, action, timestamp, before/after)."
+  tasks:
+    - "Include unit and integration test tasks; domain-invariant tests (Article 4) are mandatory and CI must be green before merge, meeting the coverage floor (Article 10)."
+    - "Include a forward-only Flyway migration task for any schema change, and an OpenAPI update task for any API change."
+    - "Include observability tasks (structured logs, metrics, OpenTelemetry traces) for new endpoints or workflows (Article 11)."
+    - "Per Article 13 (agent-first), plan for implementation and testing to be carried out by agents (parallelised where independent), with human review/approval required before merge or any irreversible action."
